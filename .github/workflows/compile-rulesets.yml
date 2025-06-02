@@ -13,6 +13,8 @@ on:
 jobs:
   sync-and-compile:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 检出当前仓库
