@@ -14,7 +14,7 @@ jobs:
   sync-and-compile:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Required to push changes back to the repository
 
     steps:
       - name: 检出当前仓库
@@ -25,21 +25,32 @@ jobs:
       - name: 稀疏检出源仓库 sing-box 目录
         run: |
           echo "🔄 开始稀疏检出 sing-box 目录..."
+          # Create temporary directory
           mkdir -p temp-source
           cd temp-source
+
+          # Initialize git repository
           git init
           git remote add origin https://github.com/SukkaLab/ruleset.skk.moe.git
+
+          # Configure sparse checkout, only get sing-box directory
           git config core.sparseCheckout true
           echo "sing-box/*" > .git/info/sparse-checkout
+
+          # Pull only the latest commit (depth 1, save time and bandwidth)
           git pull --depth=1 origin master
+
+          # Get current commit hash
           CURRENT_COMMIT=$(git rev-parse HEAD)
           echo "SOURCE_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
           echo "✅ 稀疏检出完成，提交哈希: ${CURRENT_COMMIT:0:7}"
+
           cd ..
 
       - name: 检查是否有更新
         id: check_updates
         run: |
+          # Check last synced commit record
           if [ -f "last_sync_commit.txt" ]; then
             LAST_COMMIT=$(cat last_sync_commit.txt)
             echo "上次同步提交: $LAST_COMMIT"
@@ -47,10 +58,14 @@ jobs:
             LAST_COMMIT=""
             echo "首次同步"
           fi
+
           echo "当前源提交: $SOURCE_COMMIT"
+
           if [ "$LAST_COMMIT" != "$SOURCE_COMMIT" ]; then
             echo "has_updates=true" >> $GITHUB_OUTPUT
             echo "✅ 发现新的更新"
+            
+            # Calculate file changes
             if [ -d "sing-box" ]; then
               OLD_COUNT=$(find sing-box -name "*.json" -type f 2>/dev/null | wc -l)
             else
@@ -68,9 +83,16 @@ jobs:
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           echo "🔄 同步 sing-box 目录..."
+
+          # Remove old sing-box directory
           rm -rf sing-box/
+
+          # Copy new sing-box directory
           cp -r temp-source/sing-box ./
+
+          # Record current synced commit
           echo "$SOURCE_COMMIT" > last_sync_commit.txt
+
           echo "✅ 同步完成"
           echo "📊 JSON 文件数量: $(find sing-box -name "*.json" -type f 2>/dev/null | wc -l)"
 
@@ -78,12 +100,20 @@ jobs:
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           echo "⬇️ 安装 sing-box..."
+
+          # Get latest version
           LATEST_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
           echo "📦 安装版本: $LATEST_VERSION"
+
+          # Download and extract
           wget -q https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-amd64.tar.gz
           tar -xzf sing-box-${LATEST_VERSION#v}-linux-amd64.tar.gz
           sudo mv sing-box-${LATEST_VERSION#v}-linux-amd64/sing-box /usr/local/bin/
+
+          # Clean up downloaded files
           rm -rf sing-box-${LATEST_VERSION#v}-linux-amd64*
+
+          # Verify installation
           sing-box version
           echo "✅ sing-box 安装完成"
 
@@ -91,15 +121,22 @@ jobs:
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           echo "🔨 开始编译规则集文件..."
+
+          # Count files
           json_files=$(find sing-box -name "*.json" -type f)
           json_count=$(echo "$json_files" | wc -l)
           echo "📁 找到 $json_count 个 JSON 规则文件"
+
+          # Compile counters
           compiled_success=0
           compiled_failed=0
+
+          # Compile each JSON file
           echo "$json_files" | while read -r json_file; do
             if [ -n "$json_file" ]; then
               echo "🔄 处理: $json_file"
               srs_file="${json_file%.json}.srs"
+              
               if timeout 30 sing-box rule-set compile --output "$srs_file" "$json_file" 2>/dev/null; then
                 file_size=$(ls -lh "$srs_file" | awk '{print $5}')
                 echo "  ✅ 编译成功: $srs_file ($file_size)"
@@ -110,6 +147,8 @@ jobs:
               fi
             fi
           done
+
+          # Final statistics
           srs_count=$(find sing-box -name "*.srs" -type f 2>/dev/null | wc -l)
           echo ""
           echo "📊 编译统计:"
@@ -117,9 +156,11 @@ jobs:
           echo "  - SRS 编译文件: $srs_count"
           echo "  - 编译成功: $compiled_success"
           echo "  - 编译失败: $compiled_failed"
+
           if [ "$compiled_failed" -gt 0 ]; then
             echo "⚠️ 有文件编译失败，但继续处理其他文件"
           fi
+
           echo "COMPILED_COUNT=$srs_count" >> $GITHUB_ENV
 
       - name: 生成 README 文档
@@ -153,6 +194,7 @@ jobs:
           echo '      "tag": "geosite-category-ads-all",' >> README.md
           echo '      "type": "remote",' >> README.md
           echo '      "format": "binary",' >> README.md
+          # Corrected URL generation below
           echo "      \"url\": \"[https://raw.githubusercontent.com/$](https://raw.githubusercontent.com/$){GITHUB_REPOSITORY}/${CURRENT_BRANCH_NAME}/sing-box/geosite-category-ads-all.srs\"," >> README.md
           echo '      "download_detour": "direct"' >> README.md
           echo '    }' >> README.md
@@ -175,8 +217,9 @@ jobs:
             json_file="${srs_file%.srs}.json"
             name=$(basename "$srs_file" .srs)
             size=$(ls -lh "$srs_file" | awk '{print $5}')
-            description="规则集"
+            description="规则集" # Default description
             if [ -f "$json_file" ]; then
+              # Simple description extraction, adjust based on actual JSON structure
               if grep -q "category-ads" <<< "$name"; then
                 description="广告拦截规则"
               elif grep -q "geosite" <<< "$name"; then
@@ -203,7 +246,6 @@ jobs:
           echo "- **总大小**: $TOTAL_SIZE" >> README.md
           echo "" >> README.md
           echo "## 🎯 优势特点" >> README.md
-          # ... (rest of README content as provided, ensure $ are escaped if literal or use env vars)
           echo "- ✅ **预编译**: 二进制格式加载速度快" >> README.md
           echo "- ✅ **自动更新**: 无需手动维护，始终保持最新" >> README.md
           echo "- ✅ **轻量同步**: 仅同步必要文件，节省带宽" >> README.md
@@ -224,6 +266,7 @@ jobs:
           echo "" >> README.md
           echo "⭐ 如果这个仓库对你有帮助，请给个 Star 支持一下！" >> README.md
           echo "✅ README 文档生成完成"
+
       - name: 生成 index.html 文档
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
@@ -231,7 +274,7 @@ jobs:
           LAST_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           # This prefix is taken directly from your provided index.html.
           # It implies a specific deployment path or domain configuration.
-          HTML_LINK_PREFIX="/${GITHUB_REPOSITORY#*/}"
+          HTML_LINK_PREFIX="/sing-box-ruleset-skk" # Adjust if your repo name or Pages path is different
 
           cat > index.html <<EOL
           <!DOCTYPE html>
@@ -271,22 +314,25 @@ jobs:
           EOL
 
           if [ -d "sing-box" ]; then
+            # Process subdirectories first
             find sing-box -mindepth 1 -maxdepth 1 -type d | sort | while read -r subdir_path; do
-              subdir_name=$(basename "$subdir_path") # Corrected: Removed '\' from before $ and "$subdir_path"
+              subdir_name=$(basename "$subdir_path")
               echo "            <li class=\"folder\">" >> index.html
-              echo "              $subdir_name" >> index.html # Shell expands $subdir_name
+              echo "              $subdir_name" >> index.html
               echo "              <ul>" >> index.html
               find "$subdir_path" -name "*.srs" -type f | sort | while read -r srs_file; do
-                relative_srs_path_to_singbox_dir="${srs_file#sing-box/}" # Corrected: Removed '\'
-                file_name=$(basename "$srs_file") # Corrected: Removed '\'
+                # Path relative to the sing-box directory for the link
+                relative_srs_path_to_singbox_dir="${srs_file#sing-box/}"
+                file_name=$(basename "$srs_file")
                 echo "                <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/$relative_srs_path_to_singbox_dir\">$file_name</a></li>" >> index.html
               done
               echo "              </ul>" >> index.html
               echo "            </li>" >> index.html
             done
 
+            # Process files directly under sing-box (if any, though your example doesn't show this)
             find sing-box -maxdepth 1 -name "*.srs" -type f | sort | while read -r srs_file; do
-              file_name=$(basename "$srs_file") # Corrected: Removed '\'
+              file_name=$(basename "$srs_file")
               echo "            <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/$file_name\">$file_name</a></li>" >> index.html
             done
           else
@@ -303,6 +349,14 @@ jobs:
           EOL
           echo "✅ index.html documentation generated successfully."
 
+      # MOVED CLEANUP STEP HERE - BEFORE COMMIT
+      - name: 清理临时文件
+        if: always() # Ensures cleanup even if previous steps fail, but critically before commit
+        run: |
+          echo "🧹 开始清理临时文件 temp-source..."
+          rm -rf temp-source
+          echo "🧹 清理完成"
+
       - name: 提交更新
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         env:
@@ -313,7 +367,10 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add .
+          
+          # Add all changes (temp-source should be gone now)
+          git add . 
+          
           if git diff --staged --quiet; then
             echo "ℹ️ 没有更改需要提交"
           else
@@ -335,16 +392,10 @@ jobs:
             echo "✅ 更新已提交并推送"
           fi
 
-      - name: 清理临时文件
-        if: always()
-        run: |
-          rm -rf temp-source
-          echo "🧹 清理完成"
-
       - name: 生成构建摘要
         if: always()
         env:
-          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }} # Ensure env vars are available
           COMPILED_COUNT: ${{ env.COMPILED_COUNT }}
         run: |
           if [ "${{ steps.check_updates.outputs.has_updates }}" == "true" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
@@ -356,6 +407,7 @@ jobs:
             echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
             echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
             echo "| 🕐 构建时间 | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+            # Make sure SOURCE_COMMIT is available, if not, retrieve from env or an earlier step's output
             echo "| 📝 源提交 | [\`${SOURCE_COMMIT:0:7}\`](https://github.com/SukkaLab/ruleset.skk.moe/commit/$SOURCE_COMMIT) |" >> $GITHUB_STEP_SUMMARY
             echo "| 📊 编译文件 | $COMPILED_COUNT 个规则集 |" >> $GITHUB_STEP_SUMMARY
             echo "| 📁 总大小 | $TOTAL_SIZE |" >> $GITHUB_STEP_SUMMARY
