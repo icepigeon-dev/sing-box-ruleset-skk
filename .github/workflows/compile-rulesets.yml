@@ -163,110 +163,6 @@ jobs:
 
           echo "COMPILED_COUNT=$srs_count" >> $GITHUB_ENV
 
-      - name: 生成 README 文档
-        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
-        env:
-          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
-          COMPILED_COUNT: ${{ env.COMPILED_COUNT }}
-        run: |
-          echo "📝 生成 README 文档..."
-          CURRENT_BRANCH_NAME="${GITHUB_REF_NAME}"
-          LAST_UPDATED_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          SOURCE_COMMIT_SHORT=${SOURCE_COMMIT:0:7}
-          TOTAL_SIZE_RAW=$(du -sh sing-box 2>/dev/null) # Capture output and error
-          TOTAL_SIZE=$(echo "$TOTAL_SIZE_RAW" | cut -f1)
-          if [ -z "$TOTAL_SIZE" ]; then TOTAL_SIZE="N/A"; fi
-
-          echo '# 🚀 Sing-box 规则集 (预编译二进制版本)' > README.md
-          echo '' >> README.md
-          echo '> **自动同步编译** | **开箱即用** | **高性能二进制格式**' >> README.md
-          echo '' >> README.md
-          echo '本仓库自动从 [SukkaLab/ruleset.skk.moe](https://github.com/SukkaLab/ruleset.skk.moe) 同步 sing-box 规则集源文件，并编译为高性能的二进制格式 (`.srs`)，方便直接在 sing-box 配置中使用。' >> README.md
-          echo '' >> README.md
-          echo '## 📥 快速使用' >> README.md
-          echo '' >> README.md
-          echo "在你的 sing-box 配置文件中直接引用编译后的规则集：" >> README.md
-          echo '' >> README.md
-          echo '```json' >> README.md
-          echo '{' >> README.md
-          echo '  "rule_set": [' >> README.md
-          echo '    {' >> README.md
-          echo '      "tag": "geosite-category-ads-all",' >> README.md
-          echo '      "type": "remote",' >> README.md
-          echo '      "format": "binary",' >> README.md
-          # Corrected URL generation below
-          echo "      \"url\": \"[https://raw.githubusercontent.com/$](https://raw.githubusercontent.com/$){GITHUB_REPOSITORY}/${CURRENT_BRANCH_NAME}/sing-box/geosite-category-ads-all.srs\"," >> README.md
-          echo '      "download_detour": "direct"' >> README.md
-          echo '    }' >> README.md
-          echo '  ],' >> README.md
-          echo '  "rules": [' >> README.md
-          echo '    {' >> README.md
-          echo '      "rule_set": "geosite-category-ads-all",' >> README.md
-          echo '      "outbound": "block"' >> README.md
-          echo '    }' >> README.md
-          echo '  ]' >> README.md
-          echo '}' >> README.md
-          echo '```' >> README.md
-          echo '' >> README.md
-          echo '## 📋 可用规则集' >> README.md
-          echo '' >> README.md
-          echo '| 规则集名称 | 描述 | JSON源文件 | SRS编译文件 | 文件大小 |' >> README.md
-          echo '|------------|------|------------|-------------|----------|' >> README.md
-
-          find sing-box -name "*.srs" -type f | sort | while read -r srs_file; do
-            json_file="${srs_file%.srs}.json"
-            name=$(basename "$srs_file" .srs)
-            size=$(ls -lh "$srs_file" | awk '{print $5}')
-            description="规则集" # Default description
-            if [ -f "$json_file" ]; then
-              # Simple description extraction, adjust based on actual JSON structure
-              if grep -q "category-ads" <<< "$name"; then
-                description="广告拦截规则"
-              elif grep -q "geosite" <<< "$name"; then
-                description="网站分类规则"
-              elif grep -q "geoip" <<< "$name"; then
-                description="IP地理位置规则"
-              fi
-            fi
-            echo "| \`$name\` | $description | [\`$json_file\`]($json_file) | [\`$srs_file\`]($srs_file) | $size |" >> README.md
-          done
-
-          echo "" >> README.md
-          echo "## 🔄 自动更新" >> README.md
-          echo "" >> README.md
-          echo "- **同步频率**: 每天凌晨 2:00 UTC 自动检查更新" >> README.md
-          echo "- **更新策略**: 仅同步 \`sing-box\` 目录，高效快速" >> README.md
-          echo "- **编译**: 自动编译所有 JSON 规则集为二进制格式" >> README.md
-          echo "" >> README.md
-          echo "## 📊 当前状态" >> README.md
-          echo "" >> README.md
-          echo "- **最后更新**: $LAST_UPDATED_DATE" >> README.md
-          echo "- **源仓库提交**: [\`$SOURCE_COMMIT_SHORT\`](https://github.com/SukkaLab/ruleset.skk.moe/commit/$SOURCE_COMMIT)" >> README.md
-          echo "- **规则集数量**: $COMPILED_COUNT 个" >> README.md
-          echo "- **总大小**: $TOTAL_SIZE" >> README.md
-          echo "" >> README.md
-          echo "## 🎯 优势特点" >> README.md
-          echo "- ✅ **预编译**: 二进制格式加载速度快" >> README.md
-          echo "- ✅ **自动更新**: 无需手动维护，始终保持最新" >> README.md
-          echo "- ✅ **轻量同步**: 仅同步必要文件，节省带宽" >> README.md
-          echo "- ✅ **稳定可靠**: GitHub Actions 自动化流程" >> README.md
-          echo "- ✅ **开源透明**: 完整的构建过程可追溯" >> README.md
-          echo "" >> README.md
-          echo "## 🔗 相关链接" >> README.md
-          echo "" >> README.md
-          echo "- [原始规则集仓库](https://github.com/SukkaLab/ruleset.skk.moe)" >> README.md
-          echo "- [Sing-box 官方文档](https://sing-box.sagernet.org/)" >> README.md
-          echo "- [规则集配置说明](https://sing-box.sagernet.org/configuration/rule-set/)" >> README.md
-          echo "" >> README.md
-          echo "## 📄 许可证" >> README.md
-          echo "" >> README.md
-          echo "本仓库遵循源仓库的许可证条款。编译脚本采用 MIT 许可证。" >> README.md
-          echo "" >> README.md
-          echo "---" >> README.md
-          echo "" >> README.md
-          echo "⭐ 如果这个仓库对你有帮助，请给个 Star 支持一下！" >> README.md
-          echo "✅ README 文档生成完成"
-
       - name: 生成 index.html 文档
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
@@ -384,8 +280,7 @@ jobs:
             自动处理内容:
             - 稀疏检出 sing-box 目录
             - 编译 JSON 规则集为二进制格式
-            - 更新 README.md 文档
-            - 更新 index.html 文档"
+            - 更新 index.html 文档" # Removed README.md update from commit message
 
             git commit -m "$commit_msg"
             git push
@@ -426,8 +321,7 @@ jobs:
           name: sing-box-rulesets-${{ github.run_number }}
           path: |
             sing-box/**/*.srs
-            README.md
-            index.html
+            index.html 
             last_sync_commit.txt
           retention-days: 30
           compression-level: 9
