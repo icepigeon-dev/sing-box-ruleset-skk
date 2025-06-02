@@ -22,7 +22,7 @@
   "rules": [
     {
       "rule_set": "domainset-reject",
-      "action": reject
+      "action": "reject"
     }
   ]
 }
