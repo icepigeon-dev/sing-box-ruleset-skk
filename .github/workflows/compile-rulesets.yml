@@ -222,7 +222,6 @@ jobs:
           echo "" >> README.md
           echo "⭐ 如果这个仓库对你有帮助，请给个 Star 支持一下！" >> README.md
           echo "✅ README 文档生成完成"
-
       - name: 生成 index.html 文档
         if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
         run: |
@@ -271,22 +270,22 @@ jobs:
 
           if [ -d "sing-box" ]; then
             find sing-box -mindepth 1 -maxdepth 1 -type d | sort | while read -r subdir_path; do
-              subdir_name=\$(basename "\$subdir_path")
+              subdir_name=$(basename "$subdir_path") # Corrected: Removed '\' from before $ and "$subdir_path"
               echo "            <li class=\"folder\">" >> index.html
-              echo "              \$subdir_name" >> index.html
+              echo "              $subdir_name" >> index.html # Shell expands $subdir_name
               echo "              <ul>" >> index.html
-              find "\$subdir_path" -name "*.srs" -type f | sort | while read -r srs_file; do
-                relative_srs_path_to_singbox_dir="\${srs_file#sing-box/}"
-                file_name=\$(basename "\$srs_file")
-                echo "                <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/\$relative_srs_path_to_singbox_dir\">\$file_name</a></li>" >> index.html
+              find "$subdir_path" -name "*.srs" -type f | sort | while read -r srs_file; do
+                relative_srs_path_to_singbox_dir="${srs_file#sing-box/}" # Corrected: Removed '\'
+                file_name=$(basename "$srs_file") # Corrected: Removed '\'
+                echo "                <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/$relative_srs_path_to_singbox_dir\">$file_name</a></li>" >> index.html
               done
               echo "              </ul>" >> index.html
               echo "            </li>" >> index.html
             done
 
             find sing-box -maxdepth 1 -name "*.srs" -type f | sort | while read -r srs_file; do
-              file_name=\$(basename "\$srs_file")
-              echo "            <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/\$file_name\">\$file_name</a></li>" >> index.html
+              file_name=$(basename "$srs_file") # Corrected: Removed '\'
+              echo "            <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/$file_name\">$file_name</a></li>" >> index.html
             done
           else
             echo "            <li>No sing-box rulesets found.</li>" >> index.html
