@@ -12,17 +12,17 @@
 {
   "rule_set": [
     {
-      "tag": "geosite-category-ads-all",
+      "tag": "domainset-reject",
       "type": "remote",
       "format": "binary",
-      "url": "https://icepigeon-dev.github.io/sing-box-ruleset-skk/sing-box/geosite-category-ads-all.srs",
+      "url": "https://icepigeon-dev.github.io/sing-box-ruleset-skk/sing-box/domainset/reject.srs",
       "download_detour": "direct"
     }
   ],
   "rules": [
     {
-      "rule_set": "geosite-category-ads-all",
-      "outbound": "block"
+      "rule_set": "domainset-reject",
+      "action": reject
     }
   ]
 }
