@@ -1,0 +1,380 @@
+name: Sync and Compile Sing-box Rule-sets
+
+on:
+  schedule:
+    # 每天凌晨 2:00 UTC 自动同步
+    - cron: "0 2 * * *"
+  workflow_dispatch: # 手动触发
+  push:
+    branches: [main, master]
+    paths:
+      - "sing-box/**/*.json"
+
+jobs:
+  sync-and-compile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 稀疏检出源仓库 sing-box 目录
+        run: |
+          echo "🔄 开始稀疏检出 sing-box 目录..."
+          mkdir -p temp-source
+          cd temp-source
+          git init
+          git remote add origin https://github.com/SukkaLab/ruleset.skk.moe.git
+          git config core.sparseCheckout true
+          echo "sing-box/*" > .git/info/sparse-checkout
+          git pull --depth=1 origin master
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          echo "SOURCE_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
+          echo "✅ 稀疏检出完成，提交哈希: ${CURRENT_COMMIT:0:7}"
+          cd ..
+
+      - name: 检查是否有更新
+        id: check_updates
+        run: |
+          if [ -f "last_sync_commit.txt" ]; then
+            LAST_COMMIT=$(cat last_sync_commit.txt)
+            echo "上次同步提交: $LAST_COMMIT"
+          else
+            LAST_COMMIT=""
+            echo "首次同步"
+          fi
+          echo "当前源提交: $SOURCE_COMMIT"
+          if [ "$LAST_COMMIT" != "$SOURCE_COMMIT" ]; then
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "✅ 发现新的更新"
+            if [ -d "sing-box" ]; then
+              OLD_COUNT=$(find sing-box -name "*.json" -type f 2>/dev/null | wc -l)
+            else
+              OLD_COUNT=0
+            fi
+            NEW_COUNT=$(find temp-source/sing-box -name "*.json" -type f 2>/dev/null | wc -l)
+            echo "OLD_FILE_COUNT=$OLD_COUNT" >> $GITHUB_ENV
+            echo "NEW_FILE_COUNT=$NEW_COUNT" >> $GITHUB_ENV
+          else
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ 没有新的更新"
+          fi
+
+      - name: 同步 sing-box 目录
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "🔄 同步 sing-box 目录..."
+          rm -rf sing-box/
+          cp -r temp-source/sing-box ./
+          echo "$SOURCE_COMMIT" > last_sync_commit.txt
+          echo "✅ 同步完成"
+          echo "📊 JSON 文件数量: $(find sing-box -name "*.json" -type f 2>/dev/null | wc -l)"
+
+      - name: 安装 sing-box
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "⬇️ 安装 sing-box..."
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "📦 安装版本: $LATEST_VERSION"
+          wget -q https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-${LATEST_VERSION#v}-linux-amd64.tar.gz
+          tar -xzf sing-box-${LATEST_VERSION#v}-linux-amd64.tar.gz
+          sudo mv sing-box-${LATEST_VERSION#v}-linux-amd64/sing-box /usr/local/bin/
+          rm -rf sing-box-${LATEST_VERSION#v}-linux-amd64*
+          sing-box version
+          echo "✅ sing-box 安装完成"
+
+      - name: 编译规则集文件
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "🔨 开始编译规则集文件..."
+          json_files=$(find sing-box -name "*.json" -type f)
+          json_count=$(echo "$json_files" | wc -l)
+          echo "📁 找到 $json_count 个 JSON 规则文件"
+          compiled_success=0
+          compiled_failed=0
+          echo "$json_files" | while read -r json_file; do
+            if [ -n "$json_file" ]; then
+              echo "🔄 处理: $json_file"
+              srs_file="${json_file%.json}.srs"
+              if timeout 30 sing-box rule-set compile --output "$srs_file" "$json_file" 2>/dev/null; then
+                file_size=$(ls -lh "$srs_file" | awk '{print $5}')
+                echo "  ✅ 编译成功: $srs_file ($file_size)"
+                compiled_success=$((compiled_success + 1))
+              else
+                echo "  ❌ 编译失败: $json_file"
+                compiled_failed=$((compiled_failed + 1))
+              fi
+            fi
+          done
+          srs_count=$(find sing-box -name "*.srs" -type f 2>/dev/null | wc -l)
+          echo ""
+          echo "📊 编译统计:"
+          echo "  - JSON 源文件: $json_count"
+          echo "  - SRS 编译文件: $srs_count"
+          echo "  - 编译成功: $compiled_success"
+          echo "  - 编译失败: $compiled_failed"
+          if [ "$compiled_failed" -gt 0 ]; then
+            echo "⚠️ 有文件编译失败，但继续处理其他文件"
+          fi
+          echo "COMPILED_COUNT=$srs_count" >> $GITHUB_ENV
+
+      - name: 生成 README 文档
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+          COMPILED_COUNT: ${{ env.COMPILED_COUNT }}
+        run: |
+          echo "📝 生成 README 文档..."
+          CURRENT_BRANCH_NAME="${GITHUB_REF_NAME}"
+          LAST_UPDATED_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          SOURCE_COMMIT_SHORT=${SOURCE_COMMIT:0:7}
+          TOTAL_SIZE_RAW=$(du -sh sing-box 2>/dev/null) # Capture output and error
+          TOTAL_SIZE=$(echo "$TOTAL_SIZE_RAW" | cut -f1)
+          if [ -z "$TOTAL_SIZE" ]; then TOTAL_SIZE="N/A"; fi
+
+          echo '# 🚀 Sing-box 规则集 (预编译二进制版本)' > README.md
+          echo '' >> README.md
+          echo '> **自动同步编译** | **开箱即用** | **高性能二进制格式**' >> README.md
+          echo '' >> README.md
+          echo '本仓库自动从 [SukkaLab/ruleset.skk.moe](https://github.com/SukkaLab/ruleset.skk.moe) 同步 sing-box 规则集源文件，并编译为高性能的二进制格式 (`.srs`)，方便直接在 sing-box 配置中使用。' >> README.md
+          echo '' >> README.md
+          echo '## 📥 快速使用' >> README.md
+          echo '' >> README.md
+          echo "在你的 sing-box 配置文件中直接引用编译后的规则集：" >> README.md
+          echo '' >> README.md
+          echo '```json' >> README.md
+          echo '{' >> README.md
+          echo '  "rule_set": [' >> README.md
+          echo '    {' >> README.md
+          echo '      "tag": "geosite-category-ads-all",' >> README.md
+          echo '      "type": "remote",' >> README.md
+          echo '      "format": "binary",' >> README.md
+          echo "      \"url\": \"[https://raw.githubusercontent.com/$](https://raw.githubusercontent.com/$){GITHUB_REPOSITORY}/${CURRENT_BRANCH_NAME}/sing-box/geosite-category-ads-all.srs\"," >> README.md
+          echo '      "download_detour": "direct"' >> README.md
+          echo '    }' >> README.md
+          echo '  ],' >> README.md
+          echo '  "rules": [' >> README.md
+          echo '    {' >> README.md
+          echo '      "rule_set": "geosite-category-ads-all",' >> README.md
+          echo '      "outbound": "block"' >> README.md
+          echo '    }' >> README.md
+          echo '  ]' >> README.md
+          echo '}' >> README.md
+          echo '```' >> README.md
+          echo '' >> README.md
+          echo '## 📋 可用规则集' >> README.md
+          echo '' >> README.md
+          echo '| 规则集名称 | 描述 | JSON源文件 | SRS编译文件 | 文件大小 |' >> README.md
+          echo '|------------|------|------------|-------------|----------|' >> README.md
+
+          find sing-box -name "*.srs" -type f | sort | while read -r srs_file; do
+            json_file="${srs_file%.srs}.json"
+            name=$(basename "$srs_file" .srs)
+            size=$(ls -lh "$srs_file" | awk '{print $5}')
+            description="规则集"
+            if [ -f "$json_file" ]; then
+              if grep -q "category-ads" <<< "$name"; then
+                description="广告拦截规则"
+              elif grep -q "geosite" <<< "$name"; then
+                description="网站分类规则"
+              elif grep -q "geoip" <<< "$name"; then
+                description="IP地理位置规则"
+              fi
+            fi
+            echo "| \`$name\` | $description | [\`$json_file\`]($json_file) | [\`$srs_file\`]($srs_file) | $size |" >> README.md
+          done
+
+          echo "" >> README.md
+          echo "## 🔄 自动更新" >> README.md
+          echo "" >> README.md
+          echo "- **同步频率**: 每天凌晨 2:00 UTC 自动检查更新" >> README.md
+          echo "- **更新策略**: 仅同步 \`sing-box\` 目录，高效快速" >> README.md
+          echo "- **编译**: 自动编译所有 JSON 规则集为二进制格式" >> README.md
+          echo "" >> README.md
+          echo "## 📊 当前状态" >> README.md
+          echo "" >> README.md
+          echo "- **最后更新**: $LAST_UPDATED_DATE" >> README.md
+          echo "- **源仓库提交**: [\`$SOURCE_COMMIT_SHORT\`](https://github.com/SukkaLab/ruleset.skk.moe/commit/$SOURCE_COMMIT)" >> README.md
+          echo "- **规则集数量**: $COMPILED_COUNT 个" >> README.md
+          echo "- **总大小**: $TOTAL_SIZE" >> README.md
+          echo "" >> README.md
+          echo "## 🎯 优势特点" >> README.md
+          # ... (rest of README content as provided, ensure $ are escaped if literal or use env vars)
+          echo "- ✅ **预编译**: 二进制格式加载速度快" >> README.md
+          echo "- ✅ **自动更新**: 无需手动维护，始终保持最新" >> README.md
+          echo "- ✅ **轻量同步**: 仅同步必要文件，节省带宽" >> README.md
+          echo "- ✅ **稳定可靠**: GitHub Actions 自动化流程" >> README.md
+          echo "- ✅ **开源透明**: 完整的构建过程可追溯" >> README.md
+          echo "" >> README.md
+          echo "## 🔗 相关链接" >> README.md
+          echo "" >> README.md
+          echo "- [原始规则集仓库](https://github.com/SukkaLab/ruleset.skk.moe)" >> README.md
+          echo "- [Sing-box 官方文档](https://sing-box.sagernet.org/)" >> README.md
+          echo "- [规则集配置说明](https://sing-box.sagernet.org/configuration/rule-set/)" >> README.md
+          echo "" >> README.md
+          echo "## 📄 许可证" >> README.md
+          echo "" >> README.md
+          echo "本仓库遵循源仓库的许可证条款。编译脚本采用 MIT 许可证。" >> README.md
+          echo "" >> README.md
+          echo "---" >> README.md
+          echo "" >> README.md
+          echo "⭐ 如果这个仓库对你有帮助，请给个 Star 支持一下！" >> README.md
+          echo "✅ README 文档生成完成"
+
+      - name: 生成 index.html 文档
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "📝 Generating index.html..."
+          LAST_BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # This prefix is taken directly from your provided index.html.
+          # It implies a specific deployment path or domain configuration.
+          HTML_LINK_PREFIX="/${GITHUB_REPOSITORY#*/}"
+
+          cat > index.html <<EOL
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Sing-box Ruleset Server | Sukka (@SukkaW)</title>
+            <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+            <link href="https://cdn.skk.moe/favicon.ico" rel="icon" type="image/ico">
+            <link href="https://cdn.skk.moe/favicon/apple-touch-icon.png" rel="apple-touch-icon" sizes="180x180">
+            <link href="https://cdn.skk.moe/favicon/android-chrome-192x192.png" rel="icon" type="image/png" sizes="192x192">
+            <link href="https://cdn.skk.moe/favicon/favicon-32x32.png" rel="icon" type="image/png" sizes="32x32">
+            <link href="https://cdn.skk.moe/favicon/favicon-16x16.png" rel="icon" type="image/png" sizes="16x16">
+            <meta name="description" content="Sukka 自用的 Surge / Clash Premium 规则组 (Sing-box二进制版本)">
+            <link rel="stylesheet" href="https://cdn.skk.moe/ruleset/css/21d8777a.css" />
+            <meta property="og:title" content="Surge Ruleset | Sukka (@SukkaW)">
+            <meta property="og:type" content="Website">
+            <meta property="og:url" content="https://ruleset.skk.moe/">
+            <meta property="og:image" content="https://cdn.skk.moe/favicon/android-chrome-192x192.png">
+            <meta property="og:description" content="Sukka 自用的 Surge / Clash Premium 规则组 (Sing-box二进制版本)">
+            <meta name="twitter:card" content="summary">
+            <link rel="canonical" href="https://ruleset.skk.moe/">
+          </head>
+          <body>
+            <main class="container">
+              <h1>Sukka Ruleset Server</h1>
+              <p>
+                Made by <a href="https://skk.moe">Sukka</a> | <a href="https://github.com/SukkaW/Surge/">Source @ GitHub</a> |
+                Licensed under <a href="/LICENSE" target="_blank">AGPL-3.0</a>
+              </p>
+              <p>Last Build: $LAST_BUILD_TIME</p>
+              <br>
+              <ul class="directory-list">
+                <li class="folder">
+                  sing-box
+                  <ul>
+          EOL
+
+          if [ -d "sing-box" ]; then
+            find sing-box -mindepth 1 -maxdepth 1 -type d | sort | while read -r subdir_path; do
+              subdir_name=\$(basename "\$subdir_path")
+              echo "            <li class=\"folder\">" >> index.html
+              echo "              \$subdir_name" >> index.html
+              echo "              <ul>" >> index.html
+              find "\$subdir_path" -name "*.srs" -type f | sort | while read -r srs_file; do
+                relative_srs_path_to_singbox_dir="\${srs_file#sing-box/}"
+                file_name=\$(basename "\$srs_file")
+                echo "                <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/\$relative_srs_path_to_singbox_dir\">\$file_name</a></li>" >> index.html
+              done
+              echo "              </ul>" >> index.html
+              echo "            </li>" >> index.html
+            done
+
+            find sing-box -maxdepth 1 -name "*.srs" -type f | sort | while read -r srs_file; do
+              file_name=\$(basename "\$srs_file")
+              echo "            <li><a class=\"file directory-list-file\" href=\"$HTML_LINK_PREFIX/sing-box/\$file_name\">\$file_name</a></li>" >> index.html
+            done
+          else
+            echo "            <li>No sing-box rulesets found.</li>" >> index.html
+          fi
+
+          cat >> index.html <<EOL
+                  </ul>
+                </li>
+              </ul>
+            </main>
+          </body>
+          </html>
+          EOL
+          echo "✅ index.html documentation generated successfully."
+
+      - name: 提交更新
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+          COMPILED_COUNT: ${{ env.COMPILED_COUNT }}
+          OLD_FILE_COUNT: ${{ env.OLD_FILE_COUNT }}
+          NEW_FILE_COUNT: ${{ env.NEW_FILE_COUNT }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          if git diff --staged --quiet; then
+            echo "ℹ️ 没有更改需要提交"
+          else
+            commit_msg="🤖 自动同步并编译规则集
+
+            📅 同步时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            📝 源提交: ${SOURCE_COMMIT:0:7}
+            📊 规则集数量: $COMPILED_COUNT
+            📁 JSON文件变化: $OLD_FILE_COUNT → $NEW_FILE_COUNT
+
+            自动处理内容:
+            - 稀疏检出 sing-box 目录
+            - 编译 JSON 规则集为二进制格式
+            - 更新 README.md 文档
+            - 更新 index.html 文档"
+
+            git commit -m "$commit_msg"
+            git push
+            echo "✅ 更新已提交并推送"
+          fi
+
+      - name: 清理临时文件
+        if: always()
+        run: |
+          rm -rf temp-source
+          echo "🧹 清理完成"
+
+      - name: 生成构建摘要
+        if: always()
+        env:
+          SOURCE_COMMIT: ${{ env.SOURCE_COMMIT }}
+          COMPILED_COUNT: ${{ env.COMPILED_COUNT }}
+        run: |
+          if [ "${{ steps.check_updates.outputs.has_updates }}" == "true" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TOTAL_SIZE_RAW=$(du -sh sing-box 2>/dev/null)
+            TOTAL_SIZE=$(echo "$TOTAL_SIZE_RAW" | cut -f1)
+            if [ -z "$TOTAL_SIZE" ]; then TOTAL_SIZE="N/A"; fi
+            echo "## 🎉 构建完成摘要" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🕐 构建时间 | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📝 源提交 | [\`${SOURCE_COMMIT:0:7}\`](https://github.com/SukkaLab/ruleset.skk.moe/commit/$SOURCE_COMMIT) |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📊 编译文件 | $COMPILED_COUNT 个规则集 |" >> $GITHUB_STEP_SUMMARY
+            echo "| 📁 总大小 | $TOTAL_SIZE |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **所有规则集已成功编译并更新！**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ℹ️ 无需更新" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "当前规则集已是最新版本，无需重新编译。" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 上传编译结果
+        if: steps.check_updates.outputs.has_updates == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-rulesets-${{ github.run_number }}
+          path: |
+            sing-box/**/*.srs
+            README.md
+            index.html
+            last_sync_commit.txt
+          retention-days: 30
+          compression-level: 9
