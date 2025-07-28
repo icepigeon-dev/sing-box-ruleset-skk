@@ -249,6 +249,7 @@
         "-ad.sm.cn",
         "-ad.wtzw.com",
         "-be-pack-sign.pglstatp-toutiao.com",
+        "-be-pack.pglstatp-toutiao.com",
         "-normal.zijieapi.com",
         "pangolin-sdk-toutiao"
       ],
@@ -382,7 +383,6 @@
         "^[\\w.-]*?\\.a-akamaihd\\.com$",
         "^mail\\.[\\w.-]*?-coinbase\\.com$",
         "^clog[\\w.-]*?\\.yuanfudao\\.com$",
-        "^steam\\.workshop[\\w.-]*?\\.com$",
         "^attonlineservice[\\w.-]*?\\.wixstudio\\.com$",
         "^widgets\\.[\\w.-]*?\\.webengage\\.com$",
         "^collector-[\\w.-]*?\\.tvsquared\\.com$",
@@ -670,7 +670,6 @@
         "^ad[\\w.-]*?\\.on\\.cc$",
         "^vssid\\.[\\w.-]*?\\.cc$",
         "^banner[\\w.-]*?\\.kinogo\\.by$",
-        "^noticiarecentesagora\\.net\\.klebeerlopees[\\w.-]*?\\.meusitehostgator\\.com\\.br$",
         "^mf[\\w.-]*?\\.advantage\\.as$"
       ],
       "ip_cidr": [
